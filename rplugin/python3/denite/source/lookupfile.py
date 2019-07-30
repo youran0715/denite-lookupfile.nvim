@@ -34,6 +34,7 @@ class Source(Base):
 
     def on_init(self, context):
         context['is_interactive'] = True
+        context['is_async'] = False
 
     def get_cache_dir(self):
         cache_dir = os.getenv("HOME") + "/.cache/vim/"
@@ -96,14 +97,18 @@ class Source(Base):
         return resM
 
 def saveFileList(file_path, file_list):
+    items = []
     with open(file_path, 'w') as f:
         for item in file_list:
             try:
-                f.write("%s\n" % os.path.relpath(item))
+                relpath = os.path.relpath(item)
+                items.append(relpath)
+                f.write("%s\n" % relpath)
             except UnicodeEncodeError:
                 continue
 
         f.close()
+    return items
 
 def UpdateFileList(dir_path, file_path, wildignore, linksflag):
     start_time = time.time()
@@ -120,8 +125,7 @@ def UpdateFileList(dir_path, file_path, wildignore, linksflag):
                 writelist2file(file_path, file_list)
                 return
 
-    saveFileList(file_path, file_list)
-    return file_list
+    return saveFileList(file_path, file_list)
 
 
 _escape = dict((c , "\\" + c) for c in ['^','$','.','{','}','(',')','[',']','\\','/','+'])
