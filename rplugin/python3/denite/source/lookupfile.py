@@ -31,7 +31,8 @@ class Source(Base):
             'ignore': {
                 'file': ['*.sw?','~$*','*.bak','*.exe','*.o','*.so','*.py[co]'],
                 "dir" : [".git", ".svn", ".hg", "node_modules"]
-            }
+            },
+			'cache_dir': './',
         }
 
     def on_init(self, context):
@@ -39,7 +40,7 @@ class Source(Base):
         context['is_async'] = False
 
     def get_cache_dir(self):
-        cache_dir = os.getenv("HOME") + "/.cache/vim/"
+        cache_dir = self.vars['cache_dir']
         if not os.path.isdir(cache_dir):
             os.makedirs(cache_dir)
         return cache_dir
@@ -48,9 +49,14 @@ class Source(Base):
         cwd = os.getcwd()
 
         cwd = cwd.replace('/', '_')
+        cwd = cwd.replace('\\', '_')
         cwd = cwd.replace(':', '_')
+		
+        cwd_dir = os.path.join(self.get_cache_dir(), cwd)
+        if not os.path.isdir(cwd_dir):
+            os.makedirs(cwd_dir)
 
-        return os.path.join(self.get_cache_dir(), cwd, "filelist2")
+        return os.path.join(cwd_dir, "filelist2")
 
     def map_result(self, rows, prefix):
         return [{
