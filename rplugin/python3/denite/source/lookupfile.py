@@ -21,6 +21,8 @@ class Source(Base):
         self.name = 'lookupfile'
         self.kind = 'file'
         self.persist_actions = []
+        self.count=0
+        self.redraw_done = True
         self.files = []
         self.key_files = 'lookupfiles'
         self.key_mrus = 'lookupmrus'
@@ -60,9 +62,16 @@ class Source(Base):
     def gather_candidates(self, context):
         cache_path = self.get_cache_path()
         if not os.path.isfile(cache_path) or context["is_redraw"] == True:
+            if not self.redraw_done:
+                self.vim.command('echo "please wait"')
+                return self.map_result([], 'refresh candidates, please wait')
+            self.redraw_done = False
             ignore = self.vars['ignore']
             self.files = UpdateFileList(os.getcwd(), cache_path, ignore, "0")
             SetCandidates(self.key_files, self.files)
+            self.redraw_done = True
+            context["is_redraw"] = False
+            self.vim.command('echo "Candidates redraw done!"')
         elif len(self.files) == 0:
             self.files = LoadCandidates(self.key_files, cache_path)
 
@@ -75,23 +84,15 @@ class Source(Base):
             mrus = [os.path.relpath(x) for x in mrus if x.startswith(cwd)]
             SetCandidates(self.key_mrus, mrus)
 
-        rowsM = uniteMatch(self.key_mrus, context["input"], 20, "filename-only")
-        # rows2 = uniteMatch(self.key_files, context["input"], 20, "filename-only")
-        rowsF = uniteMatch(self.key_files, context["input"], 20, "filename-only")
+        rowsM = uniteMatch(self.key_mrus, input, 20, "filename-only")
+        # rows2 = uniteMatch(self.key_files, input, 20, "filename-only")
+        rowsF = uniteMatch(self.key_files, input, 20, "filename-only")
 
         # 去掉在MRU中已有的
-        rowsF2 = []
-        for f in rowsF:
-            exist = False
-            for m in rowsM:
-                if m == f:
-                    exist = True
-            if not exist:
-                rowsF2.append(f)
+        rowsF = [f for f in rowsF if f not in rowsM]
 
-
-        resM = self.map_result(rowsM,  '[M] ')
-        resF = self.map_result(rowsF2, '[F] ')
+        resM = self.map_result(rowsM, '[M] ')
+        resF = self.map_result(rowsF, '[F] ')
 
         resM.extend(resF)
         return resM
