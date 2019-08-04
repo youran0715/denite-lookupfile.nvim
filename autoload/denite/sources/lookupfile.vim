@@ -26,6 +26,7 @@ endfunction
 
 let s:is_inited = 0
 function! denite#sources#lookupfile#vim_enter()
+    echo "vim_enter"
     if !s:is_inited
         let s:file_path = s:get_cache_path_mrulist()
         if filereadable(s:file_path)
@@ -33,6 +34,10 @@ function! denite#sources#lookupfile#vim_enter()
         endif
         let s:is_inited = 1
     endif
+endfunction
+
+function! denite#sources#lookupfile#clean_mru()
+    execute 'python3 UnitePyCleanMrus()'
 endfunction
 
 function! denite#sources#lookupfile#vim_leave()

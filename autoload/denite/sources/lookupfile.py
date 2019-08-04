@@ -7,25 +7,21 @@ import os
 mrus = []
 
 def add_mru(path):
-    file_name = os.path.basename(path)
-    dir_name = os.path.dirname(os.path.relpath(path))
+    relpath = os.path.relpath(path)
 
     global mrus
-    item = (file_name, dir_name)
-    # print("item:%s" % str(item))
     try:
-        mrus.remove(item)
+        mrus.remove(relpath)
     except Exception as e:
         pass
-    # print("before")
-    # print(mrus)
-    mrus.insert(0, item)
+    mrus.insert(0, relpath)
     mrus = mrus if len(mrus) < 30 else mrus[0:30]
     # print("after")
     # print(mrus)
 
 def UnitePyGetMrus():
-    return mrus
+    global mrus
+    vim.command('let s:mrus = %s' % str(mrus))
 
 def UnitePyAddMru():
     path = vim.eval('s:buf_path')
@@ -43,7 +39,7 @@ def UnitePySaveMrus():
         for mru in mrus:
             # vim.command('echo "' + str(mru) + '"')
             try:
-                f.write("%s\n" % (get_path(mru)))
+                f.write("%s\n" % mru)
             except UnicodeEncodeError:
                 continue
 
@@ -52,11 +48,7 @@ def UnitePySaveMrus():
 def UnitePyLoadMrus():
     file_path = vim.eval('s:file_path')
     with open(file_path,'r') as f:
-        lines = f.read().splitlines()
         global mrus
-        mrus = []
-        for line in lines:
-            item = (os.path.basename(line), os.path.dirname(line))
-            mrus.append(item)
+        mrus = f.read().splitlines()
         f.close()
 

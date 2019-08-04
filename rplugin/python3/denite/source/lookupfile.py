@@ -24,8 +24,8 @@ class Source(Base):
         self.count=0
         self.redraw_done = True
         self.files = []
-        self.mrus = []
         self.caches = {}
+        self.split = ';'
         self.vars = {
             'ignore': {
                 'file': ['*.sw?','~$*','*.bak','*.exe','*.o','*.so','*.py[co]'],
@@ -61,15 +61,14 @@ class Source(Base):
         cache_path = self.get_cache_path()
         if not os.path.isfile(cache_path) or context["is_redraw"] == True:
             if not self.redraw_done:
-                self.vim.command('echo "please wait"')
+                # self.vim.command('echo "please wait"')
                 return []
-                # return self.map_result([], 'refresh candidates, please wait')
             self.redraw_done = False
             ignore = self.vars['ignore']
             self.update_filelist(os.getcwd(), cache_path, ignore, "0")
             self.redraw_done = True
             context["is_redraw"] = False
-            self.vim.command('echo "Candidates redraw done!"')
+            # self.vim.command('echo "Candidates redraw done!"')
         elif len(self.files) == 0:
             self.load_filelist(cache_path)
 
@@ -78,11 +77,14 @@ class Source(Base):
     def UnitePyGetResult(self, inputs):
         start_time = time.time()
 
+        mrus = self.vim.call('denite#sources#lookupfile#mrus')
+        self.mrus = [(os.path.basename(mru), os.path.dirname(mru)) for mru in mrus]
+
         rows_file = self.search(self.files, inputs, 20, True)
         rows_mru = self.search(self.mrus,  inputs, 20, False)
 
         lines = [{
-            'word': ('%s;%s' % row),
+            'word': ('%s%s%s' % (row[0], self.split, row[1])),
             'abbr': ('[M] %s' % get_path(row)),
             'kind': 'file',
             'group': 'file',
@@ -90,7 +92,7 @@ class Source(Base):
             } for row in rows_mru]
 
         lines.extend([{
-            'word': ('%s;%s' % row),
+            'word': ('%s%s%s' % (row[0], self.split, row[1])),
             'abbr': ('[F] %s' % get_path(row)),
             'kind': 'file',
             'group': 'file',
@@ -103,7 +105,7 @@ class Source(Base):
         return lines
 
     def search(self, rows, inputs, limit, is_cache):
-        if inputs == "" or inputs == ";":
+        if inputs == "" or inputs == self.split:
             return rows if len(rows) <= limit else rows[:limit]
 
         rowsWithScore = []
@@ -118,7 +120,7 @@ class Source(Base):
 
             islower = is_search_lower(inputs)
 
-            kwsAndDirs = inputs.split(';')
+            kwsAndDirs = inputs.split(self.split)
             inputs_file = (kwsAndDirs[0] if len(kwsAndDirs) > 0 else "").strip()
             inputs_dir  = (kwsAndDirs[1] if len(kwsAndDirs) > 1 else "").strip()
 
