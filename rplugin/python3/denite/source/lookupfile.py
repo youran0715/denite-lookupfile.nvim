@@ -60,15 +60,15 @@ class Source(Base):
     def gather_candidates(self, context):
         cache_path = self.get_cache_path()
         if not os.path.isfile(cache_path) or context["is_redraw"] == True:
+            self.vim.command('echo "redraw start, please wait..."')
             if not self.redraw_done:
-                # self.vim.command('echo "please wait"')
                 return []
             self.redraw_done = False
             ignore = self.vars['ignore']
             self.update_filelist(os.getcwd(), cache_path, ignore, "0")
             self.redraw_done = True
             context["is_redraw"] = False
-            # self.vim.command('echo "Candidates redraw done!"')
+            self.vim.command('echo "Candidates redraw done!"')
         elif len(self.files) == 0:
             self.load_filelist(cache_path)
 
