@@ -24,15 +24,14 @@ class Source(Base):
         self.count=0
         self.redraw_done = True
         self.files = []
-        self.key_files = 'lookupfiles'
-        self.key_mrus = 'lookupmrus'
-        self.key_edit = 'lookupeidt'
+        self.mrus = []
+        self.caches = {}
         self.vars = {
             'ignore': {
                 'file': ['*.sw?','~$*','*.bak','*.exe','*.o','*.so','*.py[co]'],
                 "dir" : [".git", ".svn", ".hg", "node_modules"]
             },
-			'cache_dir': './',
+            'cache_dir': './',
         }
 
     def on_init(self, context):
@@ -51,108 +50,164 @@ class Source(Base):
         cwd = cwd.replace('/', '_')
         cwd = cwd.replace('\\', '_')
         cwd = cwd.replace(':', '_')
-		
+
         cwd_dir = os.path.join(self.get_cache_dir(), cwd)
         if not os.path.isdir(cwd_dir):
             os.makedirs(cwd_dir)
 
-        return os.path.join(cwd_dir, "filelist2")
-
-    def map_result(self, rows, prefix):
-        return [{
-            'word': x,
-            'abbr': prefix + x,
-            'action__path': x,
-            } for x in rows]
+        return os.path.join(cwd_dir, "filelist6")
 
     def gather_candidates(self, context):
         cache_path = self.get_cache_path()
         if not os.path.isfile(cache_path) or context["is_redraw"] == True:
             if not self.redraw_done:
                 self.vim.command('echo "please wait"')
-                return self.map_result([], 'refresh candidates, please wait')
+                return []
+                # return self.map_result([], 'refresh candidates, please wait')
             self.redraw_done = False
             ignore = self.vars['ignore']
-            self.files = UpdateFileList(os.getcwd(), cache_path, ignore, "0")
-            SetCandidates(self.key_files, self.files)
+            self.update_filelist(os.getcwd(), cache_path, ignore, "0")
             self.redraw_done = True
             context["is_redraw"] = False
             self.vim.command('echo "Candidates redraw done!"')
         elif len(self.files) == 0:
-            self.files = LoadCandidates(self.key_files, cache_path)
+            self.load_filelist(cache_path)
 
-        input = context["input"]
+        return self.UnitePyGetResult(context["input"])
 
-        if input == "":
-            cwd = os.getcwd()
-            mrus = self.vim.call('neomru#_gather_file_candidates')
-            # 转为相对路径
-            mrus = [os.path.relpath(x) for x in mrus if x.startswith(cwd)]
-            SetCandidates(self.key_mrus, mrus)
+    def UnitePyGetResult(self, inputs):
+        start_time = time.time()
 
-        rowsM = uniteMatch(self.key_mrus, input, 20, "filename-only")
-        # rows2 = uniteMatch(self.key_files, input, 20, "filename-only")
-        rowsF = uniteMatch(self.key_files, input, 20, "filename-only")
+        rows_file = self.search(self.files, inputs, 20, True)
+        rows_mru = self.search(self.mrus,  inputs, 20, False)
 
-        # 去掉在MRU中已有的
-        rowsF = [f for f in rowsF if f not in rowsM]
+        lines = [{
+            'word': ('%s;%s' % row),
+            'abbr': ('[M] %s' % get_path(row)),
+            'kind': 'file',
+            'group': 'file',
+            'action__path': get_path(row),
+            } for row in rows_mru]
 
-        resM = self.map_result(rowsM, '[M] ')
-        resF = self.map_result(rowsF, '[F] ')
+        lines.extend([{
+            'word': ('%s;%s' % row),
+            'abbr': ('[F] %s' % get_path(row)),
+            'kind': 'file',
+            'group': 'file',
+            'action__path': get_path(row),
+            } for row in rows_file if row not in rows_mru ])
 
-        resM.extend(resF)
-        return resM
+        end_time = time.time()
+        self.vim.command('echo "search %s cost %.1f ms, count:%d"' % (inputs, (end_time - start_time)*1000, len(lines)))
 
-def saveFileList(file_path, file_list):
-    items = []
-    with open(file_path, 'w') as f:
-        for item in file_list:
-            try:
-                relpath = os.path.relpath(item)
-                items.append(relpath)
-                f.write("%s\n" % relpath)
-            except UnicodeEncodeError:
-                continue
+        return lines
 
-        f.close()
-    return items
+    def search(self, rows, inputs, limit, is_cache):
+        if inputs == "" or inputs == ";":
+            return rows if len(rows) <= limit else rows[:limit]
 
-def UpdateFileList(dir_path, file_path, wildignore, linksflag):
-    start_time = time.time()
-    file_list = []
-    for dir_path, dirs, files in os.walk(dir_path, followlinks = False
-            if linksflag == '0' else True):
-        dirs[:] = [i for i in dirs if True not in (fnmatch.fnmatch(i,j)
-                   for j in wildignore['dir'])]
-        for name in files:
-            if True not in (fnmatch.fnmatch(name, j)
-                            for j in wildignore['file']):
-                file_list.append(os.path.join(dir_path,name))
-            if time.time() - start_time > 120:
-                writelist2file(file_path, file_list)
-                return
+        rowsWithScore = []
+        if is_cache and inputs in self.caches:
+            rowsWithScore = self.caches[inputs]
+        else:
+            if is_cache and len(inputs) > 1:
+                cacheInputs = inputs[:-1]
+                if cacheInputs in self.caches:
+                    rowsWithScore = self.caches[cacheInputs]
+                    rows = [line for score, line in rowsWithScore]
 
-    return saveFileList(file_path, file_list)
+            islower = is_search_lower(inputs)
 
+            kwsAndDirs = inputs.split(';')
+            inputs_file = (kwsAndDirs[0] if len(kwsAndDirs) > 0 else "").strip()
+            inputs_dir  = (kwsAndDirs[1] if len(kwsAndDirs) > 1 else "").strip()
 
-_escape = dict((c , "\\" + c) for c in ['^','$','.','{','}','(',')','[',']','\\','/','+'])
+            progs = [(get_regex_prog(kw, islower), "name") for kw in inputs_file.split() if kw != ""]
+            progs.extend([(get_regex_prog(kw, islower), "dir") for kw in inputs_dir.split() if kw != ""])
 
-def filename_score(reprog, path, slash):
-    # get filename via reverse find to improve performance
-    slashPos = path.rfind(slash)
-    filename = path[slashPos + 1:] if slashPos != -1 else path
+            rowsWithScore = self.do_search(rows, progs, islower)
+            # save in cache
+            if is_cache and len(progs) > 0:
+                self.caches[inputs] = rowsWithScore
 
+        return [line for score, line in heapq.nlargest(limit, rowsWithScore)]
+
+    def do_search(self, rows, progs, islower):
+        res = []
+
+        for row in rows:
+            filename = row[0].lower() if islower else row[0]
+            dir = row[1].lower() if islower else row[1]
+            scoreTotal = 0.0
+            for (prog, tp) in progs:
+                score = 0
+                if tp == "name":
+                    score = filename_score(prog, filename, dir)
+                else:
+                    score = dir_score(prog, dir)
+                if score == 0:
+                    scoreTotal = 0
+                    break
+                else:
+                    scoreTotal += score
+
+            if scoreTotal != 0:
+                res.append((scoreTotal, row))
+
+        return res
+
+    def load_filelist(self, file_path):
+        with open(file_path,'r') as f:
+            lines = f.read().splitlines()
+            self.files = []
+            self.caches = {}
+            for line in lines:
+                items = line.split("\t")
+                fileItem = (items[0], items[1])
+                self.files.append(fileItem)
+            f.close()
+
+    def save_filelist(self, file_path, file_list):
+        with open(file_path, 'w') as f:
+            self.files = []
+            self.caches = {}
+            for item in file_list:
+                try:
+                    fileItem = (os.path.basename(item) , os.path.dirname(os.path.relpath(item)))
+                    self.files.append(fileItem)
+                    f.write("%s\t%s\n" % (fileItem))
+                except UnicodeEncodeError:
+                    continue
+
+            f.close()
+
+    def update_filelist(self, dir_path, file_path, wildignore, linksflag):
+        start_time = time.time()
+        file_list = []
+        for dir_path, dirs, files in os.walk(dir_path, followlinks = False if linksflag == '0' else True):
+            dirs[:] = [i for i in dirs if True not in (fnmatch.fnmatch(i,j)
+                       for j in wildignore['dir'])]
+            for name in files:
+                if True not in (fnmatch.fnmatch(name, j) for j in wildignore['file']):
+                    file_list.append(os.path.join(dir_path,name))
+                if time.time() - start_time > 120:
+                    self.save_filelist(file_path, file_list)
+                    return
+
+        self.save_filelist(file_path, file_list)
+
+def filename_score(reprog, filename, dirname):
     result = reprog.search(filename)
     if result:
         score = result.start() * 2
         score = score + result.end() - result.start() + 1
         score = score + ( len(filename) + 1 ) / 100.0
-        score = score + ( len(path) + 1 ) / 1000.0
+        score = score + ( len(dirname) + 1 ) / 1000.0
         return 1000.0 / score
 
     return 0
 
-def path_score(reprog, line):
+def dir_score(reprog, line):
     result = reprog.search(line)
     if result:
         score = result.end() - result.start() + 1
@@ -161,14 +216,19 @@ def path_score(reprog, line):
 
     return 0
 
-def dir_score(reprog, line):
-    result = reprog.search(os.path.dirname(line))
-    if result:
-        score = result.end() - result.start() + 1
-        score = score + ( len(line) + 1 ) / 100.0
-        return 1000.0 / score
+_escape = dict((c , "\\" + c) for c in ['^','$','.','{','}','(',')','[',']','\\','/','+'])
+def get_regex_prog(kw, islower):
+    searchkw = kw.lower() if islower else kw
 
-    return 0
+    regex = ''
+    # Escape all of the characters as necessary
+    escaped = [_escape.get(c, c) for c in searchkw]
+
+    if len(searchkw) > 1:
+        regex = ''.join([c + "[^" + c + "]*" for c in escaped[:-1]])
+    regex += escaped[-1]
+
+    return re.compile(regex)
 
 def contain_upper(kw):
     prog = re.compile('[A-Z]+')
@@ -177,153 +237,5 @@ def contain_upper(kw):
 def is_search_lower(kw):
     return False if contain_upper(kw) else True
 
-def get_regex_prog(kw, isregex, islower):
-    searchkw = kw.lower() if islower else kw
-
-    regex = ''
-    # Escape all of the characters as necessary
-    escaped = [_escape.get(c, c) for c in searchkw]
-
-    if isregex:
-        if len(searchkw) > 1:
-            regex = ''.join([c + "[^" + c + "]*" for c in escaped[:-1]])
-        regex += escaped[-1]
-    else:
-        regex = ''.join(escaped)
-
-    return re.compile(regex)
-
-def Match(opts, rows, islower):
-    res = []
-
-    slash = '/' if platform.system() != "Windows" else '\\'
-
-    for row in rows:
-        line = row.lower() if islower else row
-        scoreTotal = 0.0
-        for kw, prog, mode in opts:
-            score = 0.0
-
-            if mode == 'filename-only':
-                score = filename_score(prog, line, slash)
-            elif mode == 'dir':
-                score = dir_score(prog, line)
-            else:
-                score = path_score(prog, line)
-
-            if score == 0:
-                scoreTotal = 0
-                break
-            else:
-                scoreTotal+=score
-
-        if scoreTotal != 0:
-            res.append((scoreTotal, row))
-
-    return res
-
-def GetFilterRows(rowsWithScore):
-    rez = []
-    rez.extend([line for score, line in rowsWithScore])
-    return rez
-
-def Sort(rowsWithScore, limit):
-    rez = []
-    rez.extend([line for score, line in heapq.nlargest(limit, rowsWithScore) if score != 0])
-    return rez
-
-candidates = {}
-def SetCandidates(key, items):
-    candidates[key] = items
-    clearCache(key)
-
-def LoadCandidates(key, path):
-    items = []
-    with open(path,'r') as f:
-        items = f.read().splitlines()
-
-    SetCandidates(key, items)
-    return items
-
-candidatesCache = {}
-resultCache = {}
-def clearCache(key):
-    candidatesCache[key] = {}
-    resultCache[key] = {}
-
-def getCacheKey(key, inputs):
-    return key + "@" + inputs
-
-def setCandidatesToCache(key, inputs, items):
-    cache = candidatesCache.get(key, {})
-    cache[inputs] = items
-
-def getCandidatesFromCache(key, inputs):
-    cache = candidatesCache.get(key, {})
-    return cache.get(inputs, [])
-
-def setResultToCache(key, inputs, items):
-    cache = resultCache.get(key, {})
-    cache[inputs] = items
-
-def getResultFromCache(key, inputs):
-    cache = resultCache.get(key, {})
-    return cache.get(inputs, [])
-
-def existCache(key, inputs):
-    if key not in resultCache:
-        return False
-
-    if inputs not in resultCache[key]:
-        return False
-
-    return True
-
-def getCandidates(key, inputs):
-    if len(inputs) <= 1:
-        return candidates.get(key, [])
-
-    cacheInputs = inputs[:-1]
-    if existCache(key, cacheInputs):
-        return getCandidatesFromCache(key, cacheInputs)
-
-    return candidates.get(key, [])
-
-def uniteMatch(key, inputs, limit, mmode):
-    isregex = True
-    smartcase = True
-
-    if existCache(key, inputs):
-        return getResultFromCache(key, inputs)
-
-    items = getCandidates(key, inputs)
-
-    rows = items
-    rowsFilter = items
-
-    kwsAndDirs = inputs.split(';')
-    strKws = kwsAndDirs[0] if len(kwsAndDirs) > 0 else ""
-    strDir = kwsAndDirs[1] if len(kwsAndDirs) > 1 else ""
-
-    islower = is_search_lower(inputs)
-
-    opts = [(kw, get_regex_prog(kw, isregex, islower), mmode) for kw in strKws.split() if kw != ""]
-
-    if strDir != "":
-        opts.append((strDir, get_regex_prog(strDir, isregex, islower), 'dir'))
-
-    if len(opts) > 0:
-        rowsWithScore = Match(opts, rows, islower)
-        rowsFilter = GetFilterRows(rowsWithScore)
-        rows = Sort(rowsWithScore, limit)
-
-        setCandidatesToCache(key, inputs, rowsFilter)
-        setResultToCache(key, inputs, rows)
-
-    if len(rows) > limit:
-        rows = rows[:limit]
-
-    return rows
-
-def ClearCache(key):
-    clearCache(key)
+def get_path(row):
+    return os.path.join(row[1], row[0])
